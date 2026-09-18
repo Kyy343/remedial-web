@@ -12,13 +12,19 @@ Aplikasi web sederhana untuk mengelola data mahasiswa dan tugas menggunakan PHP 
 - Status tugas: Belum Dikerjakan, Sedang Dikerjakan, dan Selesai
 - Tampilan responsif menggunakan CSS
 
-## Teknologi
+## Teknologi dan Library
 
 - PHP
 - MySQL
 - HTML
 - CSS
-- PDO
+- Bootstrap 5 (CDN) untuk tampilan antarmuka yang responsif
+
+## Library Eksternal
+
+Aplikasi ini menggunakan Bootstrap 5 melalui CDN:
+https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css
+Bootstrap digunakan untuk membantu membuat tampilan form, tabel, tombol, alert, dan layout aplikasi.
 
 ## Struktur Proyek
 
