@@ -1,64 +1,162 @@
-
 <?php
 require_once __DIR__ . '/config/database.php';
 
-function e($value) {
-    return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
+
+function e($value): string
+{
+    return htmlspecialchars(
+        (string) $value,
+        ENT_QUOTES | ENT_SUBSTITUTE,
+        'UTF-8'
+    );
+}
+
+// Token CSRF untuk melindungi form POST
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+$csrfToken = $_SESSION['csrf_token'];
 
 $error = '';
 $edit = null;
 
+// Nilai form agar tidak hilang jika validasi gagal
+$nama = '';
+$nim = '';
+$email = '';
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $aksi = $_POST['aksi'] ?? '';
+    $token = $_POST['csrf_token'] ?? '';
 
-    if ($aksi === 'tambah' || $aksi === 'edit') {
-        $nama = trim($_POST['nama'] ?? '');
-        $nim = trim($_POST['nim'] ?? '');
-        $email = trim($_POST['email'] ?? '');
+    if (
+        !is_string($token) ||
+        !hash_equals($csrfToken, $token)
+    ) {
+        $error = 'Permintaan tidak valid. Silakan muat ulang halaman.';
+    } else {
+        $aksi = $_POST['aksi'] ?? '';
 
-        if ($nama === '' || $nim === '' ||
-            !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $error = 'Nama, NIM, dan email yang valid wajib diisi.';
-        } else {
-            try {
-                if ($aksi === 'tambah') {
-                    $stmt = $pdo->prepare(
-                        'INSERT INTO mahasiswa (nama, nim, email)
-                         VALUES (?, ?, ?)'
-                    );
-                    $stmt->execute([$nama, $nim, $email]);
-                } else {
-                    $id = (int)($_POST['id'] ?? 0);
-                    $stmt = $pdo->prepare(
-                        'UPDATE mahasiswa SET nama=?, nim=?, email=?
-                         WHERE id=?'
-                    );
-                    $stmt->execute([$nama, $nim, $email, $id]);
+        if ($aksi === 'tambah' || $aksi === 'edit') {
+            $nama = trim((string) ($_POST['nama'] ?? ''));
+            $nim = trim((string) ($_POST['nim'] ?? ''));
+            $email = trim((string) ($_POST['email'] ?? ''));
+
+            $id = filter_var(
+                $_POST['id'] ?? null,
+                FILTER_VALIDATE_INT,
+                ['options' => ['min_range' => 1]]
+            );
+
+            // Validasi wajib isi
+            if ($nama === '' || $nim === '' || $email === '') {
+                $error = 'Nama, NIM, dan email wajib diisi.';
+            } elseif (
+                mb_strlen($nama, 'UTF-8') > 100 ||
+                mb_strlen($nim, 'UTF-8') > 20 ||
+                mb_strlen($email, 'UTF-8') > 100
+            ) {
+                $error = 'Panjang nama, NIM, atau email melebihi batas.';
+            } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                $error = 'Format email tidak valid.';
+            } elseif (
+                $aksi === 'edit' &&
+                ($id === false || $id === null)
+            ) {
+                $error = 'ID mahasiswa tidak valid.';
+            } else {
+                try {
+                    if ($aksi === 'tambah') {
+                        $stmt = $pdo->prepare(
+                            'INSERT INTO mahasiswa (nama, nim, email)
+                             VALUES (?, ?, ?)'
+                        );
+
+                        $stmt->execute([$nama, $nim, $email]);
+                    } else {
+                        $stmt = $pdo->prepare(
+                            'UPDATE mahasiswa
+                             SET nama = ?, nim = ?, email = ?
+                             WHERE id = ?'
+                        );
+
+                        $stmt->execute([$nama, $nim, $email, $id]);
+                    }
+
+                    header('Location: mahasiswa.php');
+                    exit;
+                } catch (PDOException $ex) {
+                    // Detail error database tidak ditampilkan ke pengguna
+                    error_log($ex->getMessage());
+
+                    $error = 'Gagal menyimpan data. Pastikan NIM dan email belum digunakan.';
                 }
-
-                header('Location: mahasiswa.php');
-                exit;
-            } catch (PDOException $ex) {
-                $error = 'Gagal menyimpan. Pastikan NIM dan email belum digunakan.';
             }
-        }
-    } elseif ($aksi === 'hapus') {
-        $id = (int)($_POST['id'] ?? 0);
-        $stmt = $pdo->prepare('DELETE FROM mahasiswa WHERE id=?');
-        $stmt->execute([$id]);
+        } elseif ($aksi === 'hapus') {
+            $id = filter_var(
+                $_POST['id'] ?? null,
+                FILTER_VALIDATE_INT,
+                ['options' => ['min_range' => 1]]
+            );
 
-        header('Location: mahasiswa.php');
-        exit;
+            if ($id === false || $id === null) {
+                $error = 'ID mahasiswa tidak valid.';
+            } else {
+                try {
+                    $stmt = $pdo->prepare(
+                        'DELETE FROM mahasiswa WHERE id = ?'
+                    );
+                    $stmt->execute([$id]);
+
+                    header('Location: mahasiswa.php');
+                    exit;
+                } catch (PDOException $ex) {
+                    error_log($ex->getMessage());
+
+                    $error = 'Gagal menghapus data. Pastikan mahasiswa tidak sedang digunakan oleh data tugas.';
+                }
+            }
+        } else {
+            $error = 'Aksi tidak dikenal.';
+        }
     }
 }
 
+// Ambil data untuk form edit
 if (isset($_GET['edit'])) {
-    $stmt = $pdo->prepare('SELECT * FROM mahasiswa WHERE id=?');
-    $stmt->execute([(int)$_GET['edit']]);
-    $edit = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+    $editId = filter_var(
+        $_GET['edit'],
+        FILTER_VALIDATE_INT,
+        ['options' => ['min_range' => 1]]
+    );
+
+    if ($editId !== false && $editId !== null) {
+        $stmt = $pdo->prepare(
+            'SELECT * FROM mahasiswa WHERE id = ?'
+        );
+        $stmt->execute([$editId]);
+        $edit = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+    }
+
+    if (!$edit && $error === '') {
+        $error = 'Data mahasiswa tidak ditemukan.';
+    }
+
+    // Isi form dengan nilai POST ketika validasi gagal
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && $error !== '') {
+        $edit = [
+            'id' => $editId ?: '',
+            'nama' => $nama,
+            'nim' => $nim,
+            'email' => $email
+        ];
+    }
 }
 
+// Ambil seluruh data mahasiswa
 $mahasiswa = $pdo->query(
     'SELECT * FROM mahasiswa ORDER BY id DESC'
 )->fetchAll(PDO::FETCH_ASSOC);
@@ -72,12 +170,11 @@ $mahasiswa = $pdo->query(
 
     <title>Data Mahasiswa | TaskManager</title>
 
-    <!-- Library Bootstrap 5 -->
+    <!-- Bootstrap 5 -->
     <link
         href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css"
         rel="stylesheet">
 
-    <!-- CSS buatan sendiri -->
     <link rel="stylesheet" href="style.css">
 </head>
 
@@ -85,7 +182,6 @@ $mahasiswa = $pdo->query(
 
 <div class="app-layout">
 
-    <!-- SIDEBAR -->
     <aside class="sidebar">
         <div class="brand">Task<span>Manager</span></div>
 
@@ -94,7 +190,6 @@ $mahasiswa = $pdo->query(
         <a href="tugas.php">Data Tugas</a>
     </aside>
 
-    <!-- KONTEN UTAMA -->
     <main class="main-content">
 
         <div class="topbar">
@@ -106,9 +201,8 @@ $mahasiswa = $pdo->query(
             </div>
         </div>
 
-        <!-- STATISTIK -->
+        <!-- Statistik -->
         <div class="stats-grid">
-
             <div class="stat-card">
                 <p>Total Mahasiswa</p>
                 <strong><?= count($mahasiswa) ?></strong>
@@ -125,11 +219,10 @@ $mahasiswa = $pdo->query(
                     Aktif
                 </strong>
             </div>
-
         </div>
 
-        <!-- PESAN ERROR BOOTSTRAP -->
-        <?php if ($error): ?>
+        <!-- Pesan error -->
+        <?php if ($error !== ''): ?>
             <div class="alert alert-danger alert-dismissible fade show"
                  role="alert">
                 <?= e($error) ?>
@@ -142,7 +235,7 @@ $mahasiswa = $pdo->query(
             </div>
         <?php endif; ?>
 
-        <!-- FORM MAHASISWA -->
+        <!-- Form mahasiswa -->
         <section class="card shadow-sm mb-4">
 
             <div class="card-header bg-primary text-white">
@@ -153,7 +246,11 @@ $mahasiswa = $pdo->query(
 
             <div class="card-body">
 
-                <form method="post">
+                <form method="post" action="mahasiswa.php<?= $edit ? '?edit=' . (int)$edit['id'] : '' ?>">
+
+                    <input type="hidden"
+                           name="csrf_token"
+                           value="<?= e($csrfToken) ?>">
 
                     <input type="hidden"
                            name="aksi"
@@ -178,13 +275,11 @@ $mahasiswa = $pdo->query(
                             required
                             maxlength="100"
                             placeholder="Masukkan nama mahasiswa"
-                            value="<?= e($edit['nama'] ?? '') ?>">
+                            value="<?= e($edit['nama'] ?? $nama) ?>">
                     </div>
 
                     <div class="mb-3">
-                        <label for="nim" class="form-label">
-                            NIM
-                        </label>
+                        <label for="nim" class="form-label">NIM</label>
 
                         <input
                             type="text"
@@ -194,13 +289,11 @@ $mahasiswa = $pdo->query(
                             required
                             maxlength="20"
                             placeholder="Masukkan NIM"
-                            value="<?= e($edit['nim'] ?? '') ?>">
+                            value="<?= e($edit['nim'] ?? $nim) ?>">
                     </div>
 
                     <div class="mb-3">
-                        <label for="email" class="form-label">
-                            Email
-                        </label>
+                        <label for="email" class="form-label">Email</label>
 
                         <input
                             type="email"
@@ -210,7 +303,7 @@ $mahasiswa = $pdo->query(
                             required
                             maxlength="100"
                             placeholder="nama@email.com"
-                            value="<?= e($edit['email'] ?? '') ?>">
+                            value="<?= e($edit['email'] ?? $email) ?>">
                     </div>
 
                     <button class="btn btn-primary" type="submit">
@@ -225,11 +318,10 @@ $mahasiswa = $pdo->query(
                     <?php endif; ?>
 
                 </form>
-
             </div>
         </section>
 
-        <!-- TABEL DATA MAHASISWA -->
+        <!-- Tabel mahasiswa -->
         <section class="card shadow-sm">
 
             <div class="card-header">
@@ -237,7 +329,6 @@ $mahasiswa = $pdo->query(
             </div>
 
             <div class="card-body">
-
                 <div class="table-responsive">
 
                     <table class="table table-striped table-hover table-bordered align-middle">
@@ -253,67 +344,67 @@ $mahasiswa = $pdo->query(
                         </thead>
 
                         <tbody>
+                        <?php if (count($mahasiswa) > 0): ?>
 
-                            <?php if (count($mahasiswa) > 0): ?>
-
-                                <?php foreach ($mahasiswa as $m): ?>
-                                    <tr>
-                                        <td><?= e($m['id']) ?></td>
-                                        <td><?= e($m['nama']) ?></td>
-                                        <td><?= e($m['nim']) ?></td>
-                                        <td><?= e($m['email']) ?></td>
-
-                                        <td>
-                                            <div class="d-flex flex-wrap gap-2">
-
-                                                <a
-                                                    class="btn btn-warning btn-sm"
-                                                    href="?edit=<?= e($m['id']) ?>">
-                                                    Edit
-                                                </a>
-
-                                                <form
-                                                    method="post"
-                                                    onsubmit="return confirm('Hapus mahasiswa ini?')">
-
-                                                    <input
-                                                        type="hidden"
-                                                        name="aksi"
-                                                        value="hapus">
-
-                                                    <input
-                                                        type="hidden"
-                                                        name="id"
-                                                        value="<?= e($m['id']) ?>">
-
-                                                    <button
-                                                        class="btn btn-danger btn-sm"
-                                                        type="submit">
-                                                        Hapus
-                                                    </button>
-
-                                                </form>
-
-                                            </div>
-                                        </td>
-                                    </tr>
-                                <?php endforeach; ?>
-
-                            <?php else: ?>
-
+                            <?php foreach ($mahasiswa as $m): ?>
                                 <tr>
-                                    <td colspan="5"
-                                        class="text-center text-muted">
-                                        Belum ada data mahasiswa.
+                                    <td><?= e($m['id']) ?></td>
+                                    <td><?= e($m['nama']) ?></td>
+                                    <td><?= e($m['nim']) ?></td>
+                                    <td><?= e($m['email']) ?></td>
+
+                                    <td>
+                                        <div class="d-flex flex-wrap gap-2">
+
+                                            <a
+                                                class="btn btn-warning btn-sm"
+                                                href="?edit=<?= (int)$m['id'] ?>">
+                                                Edit
+                                            </a>
+
+                                            <form
+                                                method="post"
+                                                action="mahasiswa.php"
+                                                onsubmit="return confirm('Hapus mahasiswa ini?')">
+
+                                                <input
+                                                    type="hidden"
+                                                    name="csrf_token"
+                                                    value="<?= e($csrfToken) ?>">
+
+                                                <input
+                                                    type="hidden"
+                                                    name="aksi"
+                                                    value="hapus">
+
+                                                <input
+                                                    type="hidden"
+                                                    name="id"
+                                                    value="<?= (int)$m['id'] ?>">
+
+                                                <button
+                                                    class="btn btn-danger btn-sm"
+                                                    type="submit">
+                                                    Hapus
+                                                </button>
+                                            </form>
+
+                                        </div>
                                     </td>
                                 </tr>
+                            <?php endforeach; ?>
 
-                            <?php endif; ?>
-
+                        <?php else: ?>
+                            <tr>
+                                <td colspan="5"
+                                    class="text-center text-muted">
+                                    Belum ada data mahasiswa.
+                                </td>
+                            </tr>
+                        <?php endif; ?>
                         </tbody>
 
                     </table>
-
                 </div>
             </div>
         </section>
@@ -321,7 +412,6 @@ $mahasiswa = $pdo->query(
     </main>
 </div>
 
-<!-- JavaScript Bootstrap untuk tombol alert -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"></script>
 
 </body>
